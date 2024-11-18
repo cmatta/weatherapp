@@ -77,6 +77,12 @@ export function Page() {
     handleFetchWeatherAndTides()
   }, [handleFetchWeatherAndTides])
 
+  useEffect(() => {
+    if (weather?.current) {
+      console.log('weather.current:', weather.current);
+    }
+  }, [weather]);
+
   return (
     <div className="max-w-4xl mx-auto p-4">
       <Card className="w-full max-w-4xl mx-auto">

@@ -19,14 +19,27 @@ async function getCoordinates(city: string) {
 }
 
 async function getWeather(lat: number, lon: number) {
-  const response = await fetch(
-    `${BASE_URL}?lat=${lat}&lon=${lon}&exclude=minutely,hourly,alerts&units=imperial&appid=${API_KEY}`
-  );
+  const url = `${BASE_URL}?lat=${lat}&lon=${lon}&exclude=minutely,hourly,alerts&units=imperial&appid=${API_KEY}`
+  console.log('Fetching weather from: ', url);
+
+  const response = await fetch(url, {
+    cache: 'no-store',
+    next: {revalidate: 0}
+  });
+
   if (!response.ok) {
     const data = await response.json();
     throw new Error(data.message || 'Failed to fetch weather data');
   }
-  return response.json();
+  
+  const data = await response.json();
+  
+  // Debug timestamps
+  // console.log('Current time:', new Date().toISOString());
+  // console.log('API data time:', new Date(data.current.dt * 1000).toISOString());
+  // console.log('Full response:', data);
+  
+  return data;
 }
 
 export async function GET(request: Request) {
