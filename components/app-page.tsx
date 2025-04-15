@@ -40,12 +40,12 @@ function getWeatherIcon(description: string, current?: { sunset?: number, moonPh
   }
 }
 
-export function Page() {
-  const city = process.env.WEATHERAPP_CITY || 'Madison,CT,USA' // Set default city from environment variable
-  const stationId = parseInt(process.env.WEATHERAPP_TIDE_STATION_ID || '8465705', 10) // Tide Station New Haven from environment variable
-  const [weather, setWeather] = useState<WeatherData | null>(null)
-  const [tides, setTides] = useState<TideData | null>(null)
-  const [error, setError] = useState('')
+type AppPageProps = {
+  city: string;
+  stationId: number;
+};
+
+export default function AppPage({ city, stationId }: AppPageProps) {
 
   // Add a time dependency that updates every 30 minutes
   const timeIntervalKey = Math.floor(Date.now() / (30 * 60 * 1000)); 
@@ -53,7 +53,11 @@ export function Page() {
 
   // State to hold the time *after* client-side hydration
   const [clientTime, setClientTime] = useState<number | null>(null);
+  
 
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [tides, setTides] = useState<TideData | null>(null);
+  const [error, setError] = useState('');
   // Set clientTime after component mounts
   useEffect(() => {
     setClientTime(currentTime);
@@ -133,7 +137,19 @@ export function Page() {
   }, [tides, currentTime]); // Recalculate when tides or currentTime changes
 
   return (
-    <div className="p-4 border border-black bg-background text-foreground w-[800px] h-[480px] overflow-hidden">
+    <div
+      style={{
+        width: 600,
+        height: 448,
+        overflow: "hidden",
+        position: "relative",
+        background: "#fff",
+        margin: "0 auto",
+        boxSizing: "border-box",
+      }}
+      data-testid="inky-root"
+    >
+      <div className="p-4 border border-black bg-background text-foreground w-full h-full overflow-hidden">
       <Card className="w-full h-full border-none shadow-none rounded-none bg-transparent">
         <CardHeader className="pb-2 pt-2">
           <CardTitle className="text-xl">Weather for {city.includes(',') ? city.split(',')[0] : city}</CardTitle>
@@ -221,7 +237,7 @@ export function Page() {
                     </LineChart>
                 </ResponsiveContainer>
                 {tides && (
-                  <div className="flex items-center justify-center mt-2">
+                  <div data-testid="tide-info" className="flex items-center justify-center mt-2">
                     <Waves className="w-5 h-5 mr-2 text-[var(--inky-blue)]" /> {/* Blue Waves icon using variable */}
                     <span className="font-semibold">
                       Current Tide: {
@@ -269,6 +285,7 @@ export function Page() {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   )
 }

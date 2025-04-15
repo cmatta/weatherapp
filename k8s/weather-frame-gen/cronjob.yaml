@@ -1,0 +1,47 @@
+# /Users/chris/Documents/Projects/weatherframe/weatherapp/k8s/weather-frame-gen/cronjob.yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: weather-frame-generator
+  # Optional: Add namespace if needed: namespace: your-namespace
+spec:
+  # Run every 15 minutes (at :00, :15, :30, :45 past the hour)
+  schedule: "*/15 * * * *" 
+  # Keep the last 3 successful jobs and 1 failed job for history
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  # Don't run concurrent jobs if the previous one is still running
+  concurrencyPolicy: Forbid 
+  # Deadline for starting the job if it misses scheduled time (e.g., 5 minutes)
+  startingDeadlineSeconds: 300 
+  jobTemplate:
+    spec:
+      # How long the pod can run before being terminated (e.g., 10 minutes)
+      activeDeadlineSeconds: 600 
+      # Number of retries before marking job as failed
+      backoffLimit: 2 
+      template:
+        spec:
+          containers:
+          - name: frame-generator
+            # Use the image we are building/pushing
+            image: cmatta/weather-frame-generator:latest 
+            imagePullPolicy: Always # Ensure it pulls the latest image tag
+            env:
+            - name: APP_URL
+              # --- IMPORTANT: Replace with the actual URL of your weather app service ---
+              value: "https://weather.matta.limo"
+            - name: TZ
+              value: America/New_York
+            volumeMounts:
+            - name: nfs-output # Mount the NFS volume
+              mountPath: /output # Mount point inside the container
+          volumes:
+          - name: nfs-output
+            nfs:
+              # --- IMPORTANT: Replace with your NFS server details ---
+              server: woody.local
+              path: /mnt/user/Downloads/weatherframe 
+              readOnly: false # Needs write access to save the image
+          # Restart policy for pods within the job
+          restartPolicy: Never
