@@ -26,7 +26,6 @@ A modern weather application built with Next.js that displays weather conditions
 - [Next.js](https://nextjs.org/) - React framework
 - [TypeScript](https://www.typescriptlang.org/) - Type safety
 - [Tailwind CSS](https://tailwindcss.com/) - Styling
-- [Recharts](https://recharts.org/) - Interactive charts
 - [Lucide React](https://lucide.dev/) - Icons
 
 ## Getting Started
