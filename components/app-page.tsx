@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import dynamic from 'next/dynamic'
 const TideChart = dynamic(() => import('./TideChart'), { ssr: false })
-const MinimalChart = dynamic(() => import('./MinimalChart'), { ssr: false })
 import { Sun, Cloud, CloudRain, Waves, CloudLightning, CloudDrizzle, CloudSnow } from 'lucide-react'
 import { WeatherData } from '../models/weatherData'
 import { TideData, TidePrediction } from '../models/tidePrediction'
@@ -162,21 +161,19 @@ export default function AppPage({ city, stationId }: AppPageProps) {
   }, [tides, currentTime]); // Recalculate when tides or currentTime changes
 
   // Prepare chart data for tide chart
-  const chartData = tides?.predictions
-    .filter(pred => {
-      const predTime = new Date(pred.time + ' GMT');
-      return predTime >= new Date(dates.beginDate) && predTime <= new Date(dates.endDate);
-    })
-    .map(pred => ({
-      ...pred,
-      time: new Date(pred.time + ' GMT').getTime(), // Use timestamp for chart
-      height: pred.height
-    })) || [];
-  if (hasMounted) {
-    console.log("Tide chart data", chartData);
-    // Expose chartData for browser debugging
-    // window.chartData = chartData; // Clean up after debugging
-  }
+  const chartData = useMemo(() => {
+    if (!tides || !dates) return [];
+    return tides.predictions
+      .filter(pred => {
+        const predTime = new Date(pred.time + ' GMT');
+        return predTime >= new Date(dates.beginDate) && predTime <= new Date(dates.endDate);
+      })
+      .map(pred => ({
+        ...pred,
+        time: new Date(pred.time + ' GMT').getTime(), // Use timestamp for chart
+        height: pred.height
+      }))
+  }, [tides, dates]); // Removed timeIntervalKey from dependency array
 
   return (
     <div

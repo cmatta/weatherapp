@@ -18,10 +18,6 @@ const EINK_COLORS = {
 };
 
 export default function TideChart({ chartData, timeZone = "America/New_York" }: TideChartProps) {
-  // Deep debug: log chartData
-  if (typeof window !== "undefined") {
-    console.log("[TideChart] chartData:", chartData);
-  }
   if (!chartData || chartData.length === 0) {
     return (
       <div style={{ color: EINK_COLORS.red, fontSize: 12 }}>
@@ -34,7 +30,6 @@ export default function TideChart({ chartData, timeZone = "America/New_York" }: 
   const width = 800;
   const height = 120;
   const margin = { top: 20, right: 40, bottom: 20, left: 40 };
-  const plotWidth = width - margin.left - margin.right - 1; // subtract 1px for safety
   const plotHeight = height - margin.top - margin.bottom;
 
   // X and Y data extents
@@ -128,7 +123,7 @@ export default function TideChart({ chartData, timeZone = "America/New_York" }: 
           </g>
         ))}
         {/* X ticks and labels */}
-        {xTicks.map((t, i) => {
+        {xTicks.map((t) => {
           const x = Math.min(xScale(t), maxDrawableX);
           return (
             <g key={t}>
