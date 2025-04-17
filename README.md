@@ -2,6 +2,8 @@
 
 A modern weather application built with Next.js that displays weather conditions and tide predictions.
 
+I'm using this with a [Primoroni Inky 7 Display](https://shop.pimoroni.com/products/inky-impression-7-3?variant=55186435244411)
+
 ![Weather App](weatherapp.png)
 
 
