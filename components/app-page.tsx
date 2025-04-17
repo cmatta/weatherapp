@@ -2,20 +2,35 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceLine } from 'recharts'
+import dynamic from 'next/dynamic'
+const TideChart = dynamic(() => import('./TideChart'), { ssr: false })
+const MinimalChart = dynamic(() => import('./MinimalChart'), { ssr: false })
 import { Sun, Cloud, CloudRain, Waves, CloudLightning, CloudDrizzle, CloudSnow } from 'lucide-react'
 import { WeatherData } from '../models/weatherData'
 import { TideData, TidePrediction } from '../models/tidePrediction'
 import { formatDateTime } from '../lib/utils'
-import MoonPhaseIcon from './moonPhase'
+import MoonPhaseIcon, { type MoonPhaseType } from './moonPhase'
 
 const timeZone = 'America/New_York';
+
+function mapMoonPhaseToType(phaseValue: number): MoonPhaseType {
+  if (phaseValue === 0 || phaseValue === 1) return 'new';
+  if (phaseValue > 0 && phaseValue < 0.25) return 'waxingCrescent';
+  if (phaseValue === 0.25) return 'firstQuarter';
+  if (phaseValue > 0.25 && phaseValue < 0.5) return 'waxingGibbous';
+  if (phaseValue === 0.5) return 'full';
+  if (phaseValue > 0.5 && phaseValue < 0.75) return 'waningGibbous';
+  if (phaseValue === 0.75) return 'lastQuarter';
+  if (phaseValue > 0.75 && phaseValue < 1) return 'waningCrescent';
+  return 'new'; // Default fallback
+}
 
 function getWeatherIcon(description: string, current?: { sunset?: number, moonPhase?: number }, isCurrentWeather = false) {
   // Only check for night/moon if this is the current weather box
   if (isCurrentWeather && current?.sunset && Date.now() / 1000 > current.sunset) {
-    // MoonPhaseIcon uses currentColor, which should be black (text-foreground)
-    return <MoonPhaseIcon phase='firstQuarter' size={32} /> 
+    // Use the mapping function
+    const phaseType = mapMoonPhaseToType(current.moonPhase ?? 0);
+    return <MoonPhaseIcon phase={phaseType} size={32} /> 
   }
 
   switch (description.toLowerCase()) {
@@ -53,11 +68,18 @@ export default function AppPage({ city, stationId }: AppPageProps) {
 
   // State to hold the time *after* client-side hydration
   const [clientTime, setClientTime] = useState<number | null>(null);
+  const [hasMounted, setHasMounted] = useState(false);
+
+  useEffect(() => {
+    setHasMounted(true);
+  }, []);
   
 
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [tides, setTides] = useState<TideData | null>(null);
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+
   // Set clientTime after component mounts
   useEffect(() => {
     setClientTime(currentTime);
@@ -72,6 +94,7 @@ export default function AppPage({ city, stationId }: AppPageProps) {
 
   const handleFetchWeatherAndTides = useCallback(async () => {
     setError('')
+    setIsLoading(true); // Start loading
     try {
       const [weatherResponse, tideResponse] = await Promise.all([
         fetch(`/api/weather?city=${city}`),
@@ -85,6 +108,8 @@ export default function AppPage({ city, stationId }: AppPageProps) {
 
     } catch (err: Error | unknown) {
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
+    } finally {
+      setIsLoading(false); // Finish loading regardless of success/error
     }
   }, [city, stationId, dates.beginDate, dates.endDate])
 
@@ -136,11 +161,28 @@ export default function AppPage({ city, stationId }: AppPageProps) {
     return { nextHighTide: nextHigh, nextLowTide: nextLow };
   }, [tides, currentTime]); // Recalculate when tides or currentTime changes
 
+  // Prepare chart data for tide chart
+  const chartData = tides?.predictions
+    .filter(pred => {
+      const predTime = new Date(pred.time + ' GMT');
+      return predTime >= new Date(dates.beginDate) && predTime <= new Date(dates.endDate);
+    })
+    .map(pred => ({
+      ...pred,
+      time: new Date(pred.time + ' GMT').getTime(), // Use timestamp for chart
+      height: pred.height
+    })) || [];
+  if (hasMounted) {
+    console.log("Tide chart data", chartData);
+    // Expose chartData for browser debugging
+    // window.chartData = chartData; // Clean up after debugging
+  }
+
   return (
     <div
       style={{
-        width: 600,
-        height: 448,
+        width: 800,
+        height: 480,
         overflow: "hidden",
         position: "relative",
         background: "#fff",
@@ -154,13 +196,15 @@ export default function AppPage({ city, stationId }: AppPageProps) {
         <CardHeader className="pb-2 pt-2">
           <CardTitle className="text-xl">Weather for {city.includes(',') ? city.split(',')[0] : city}</CardTitle>
           {/* Only render time after client mount */}
-          {clientTime && (
-            <p className='text-xs text-right'>Last Refresh: {new Date(clientTime).toLocaleTimeString()}</p>
+          {hasMounted && clientTime && (
+            <p className='text-xs text-right'>Last Refresh: {new Date(clientTime).toLocaleTimeString([], { timeZone: timeZone, hour: 'numeric', minute: '2-digit' })}</p>
           )}
         </CardHeader>
         <CardContent>
-          {error && <p className="mb-4">Error: {error}</p>} 
-          {weather && (
+          {error && <p className="mb-4 text-destructive">Error: {error}</p>} 
+          {isLoading && !error && <p>Loading...</p>}
+
+          {!isLoading && !error && weather && tides && (
             <>
               <div className="grid grid-cols-6 gap-4 mb-6">
                 <div className="col-span-2 p-4 rounded-lg border border-black"> 
@@ -181,7 +225,7 @@ export default function AppPage({ city, stationId }: AppPageProps) {
                 {weather.daily.slice(1, 5).map((day, index) => (
                   <div key={index} className="text-center p-2 rounded-lg border border-black">
                     <div className="text-sm">{new Date(day.dt * 1000).toLocaleDateString('en-US', { weekday: 'short' })}</div>
-                    {getWeatherIcon(day.weather[0].main)}
+                    <div className="flex justify-center w-full mb-1">{getWeatherIcon(day.weather[0].main)}</div>
                     <div className="text-sm font-semibold">
                       High: <span className="text-[var(--inky-red)]">{Math.round(day.temp.max)}°F</span>, Low: <span className="text-[var(--inky-blue)]">{Math.round(day.temp.min)}°F</span>
                     </div>
@@ -190,52 +234,12 @@ export default function AppPage({ city, stationId }: AppPageProps) {
               </div>
               <div>
                 <h3 className="text-lg font-semibold mb-2">Tide Chart</h3>
-                <ResponsiveContainer width="100%" height={120}>
-                  <LineChart
-                    data={tides?.predictions
-                      .filter(pred => {
-                        const predTime = new Date(pred.time + ' GMT');
-                        return predTime >= new Date(dates.beginDate) && predTime <= new Date(dates.endDate);
-                      })
-                      .map(pred => ({
-                      ...pred,
-                      time: new Date(pred.time + ' GMT').getTime(),
-                      height: pred.height
-                    })) || []}
-                    margin={{ top: 5, right: 20, left: -20, bottom: 5 }} // Adjust margins if needed
-                  >
-                    <XAxis
-                      dataKey="time"
-                      tickFormatter={(time: string) => 
-                        new Date(time).toLocaleString('en-US', { hour: 'numeric', timeZone: timeZone })
-                      }
-                      type="category"
-                      domain={['dataMin', 'dataMax']}
-                      scale="time"
-                      stroke="#000000" // Black axis line
-                      tick={{ fill: '#000000' }} // Black tick labels
-                    />
-                    <YAxis 
-                      domain={['dataMin', 'dataMax']} // Simpler domain
-                      stroke="#000000" // Black axis line
-                      tick={{ fill: '#000000' }} // Black tick labels
-                      allowDecimals={false}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="height"
-                      stroke="var(--inky-blue)" // Blue line using CSS variable
-                      dot={false} // Remove dots for cleaner look
-                      isAnimationActive={false}
-                    />  
-                    <ReferenceLine
-                      x={currentTime} // Use the consistent state variable                 
-                      stroke="var(--inky-red)" // Red reference line using CSS variable
-                      strokeWidth={1} // Thinner line
-                      label={{ value: 'Now', position: 'insideTopRight', fill: 'var(--inky-red)' }} // Red label
-                    />                  
-                    </LineChart>
-                </ResponsiveContainer>
+                {hasMounted && (
+                  <>
+                    <TideChart chartData={chartData} timeZone={timeZone} />
+                  </>
+                )}
+
                 {tides && (
                   <div data-testid="tide-info" className="flex items-center justify-center mt-2">
                     <Waves className="w-5 h-5 mr-2 text-[var(--inky-blue)]" /> {/* Blue Waves icon using variable */}
@@ -261,22 +265,17 @@ export default function AppPage({ city, stationId }: AppPageProps) {
                     {nextHighTide && (
                       <p className="mb-1">
                         Next High: {nextHighTide.height.toFixed(1)} ft at{' '}
-                        {new Date(nextHighTide.time + ' GMT').toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                          timeZone: timeZone,
-                        })}
+                        {new Date(nextHighTide.time + ' GMT').toLocaleTimeString([], { timeZone: timeZone, hour: 'numeric', minute: '2-digit' })}
                       </p>
                     )}
                     {nextLowTide && (
                       <p>
                         Next Low: {nextLowTide.height.toFixed(1)} ft at{' '}
-                        {new Date(nextLowTide.time + ' GMT').toLocaleTimeString('en-US', {
-                          hour: 'numeric',
-                          minute: '2-digit',
-                          timeZone: timeZone,
-                        })}
+                        {new Date(nextLowTide.time + ' GMT').toLocaleTimeString([], { timeZone: timeZone, hour: 'numeric', minute: '2-digit' })}
                       </p>
+                    )}
+                    {!nextHighTide && !nextLowTide && tides?.predictions?.length > 0 && (
+                      <p className="text-sm">Tide data available, but next high/low not found in the upcoming window.</p>
                     )}
                   </div>
                 )}

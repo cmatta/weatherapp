@@ -1,7 +1,7 @@
 import React from 'react';
 
 // --- Define the specific allowed phase types --- 
-type MoonPhaseType = 'new' | 'waxingCrescent' | 'firstQuarter' | 'waxingGibbous' | 'full' | 'waningGibbous' | 'lastQuarter' | 'waningCrescent';
+export type MoonPhaseType = 'new' | 'waxingCrescent' | 'firstQuarter' | 'waxingGibbous' | 'full' | 'waningGibbous' | 'lastQuarter' | 'waningCrescent';
 
 interface MoonPhaseIconProps {
   phase: MoonPhaseType; // Use the specific type here

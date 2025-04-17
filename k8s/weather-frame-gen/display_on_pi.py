@@ -1,6 +1,6 @@
 # /home/pi/weatherframe/display_on_pi.py
 
-from inky.inky_uc8159 import Inky
+from inky.auto import auto as Inky
 from PIL import Image
 import os
 import time

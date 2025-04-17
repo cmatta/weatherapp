@@ -9,8 +9,8 @@ import os # Added for path joining
 # --- Configuration ---
 # URL of your running weather app (e.g., [http://weatherapp-service.your-namespace.svc.cluster.local](http://weatherapp-service.your-namespace.svc.cluster.local):3000)
 APP_URL = os.environ.get("APP_URL", "https://weather.matta.limo") 
-WIDTH = 600
-HEIGHT = 448
+WIDTH = 800
+HEIGHT = 480
 # Output path within the container, expected to be an NFS mount
 OUTPUT_DIR = "/output" 
 OUTPUT_FILENAME = os.path.join(OUTPUT_DIR, "inky_frame.png")
