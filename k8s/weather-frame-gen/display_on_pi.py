@@ -1,19 +1,25 @@
 # /home/pi/weatherframe/display_on_pi.py
+#
+# This script fetches weather data images directly from the weather app's
+# screenshot API endpoint and displays them on an Inky e-ink display.
+# 
+# No NFS mount or file sharing required - everything is done via HTTP API.
 
 from inky.auto import auto as Inky
 from PIL import Image, ImageDraw, ImageFont
-import os
+import requests
+import io
 import time
 import textwrap
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- Configuration ---
-# Path where the NFS share is mounted on the Pi Zero
-NFS_MOUNT_PATH = "/mnt/weatherframe"  # <<< CHANGE THIS TO YOUR ACTUAL MOUNT POINT
-IMAGE_FILENAME = "inky_frame.png"
-IMAGE_FULL_PATH = os.path.join(NFS_MOUNT_PATH, IMAGE_FILENAME)
-MAX_IMAGE_AGE_MINUTES = 60  # Consider image stale if older than this (minutes)
-MAX_WAIT_SECONDS = 60  # Max time to wait for a new image file (seconds)
+# Weather app API endpoint
+WEATHER_API_URL = "https://weather.matta.limo/api/screenshot"  # <<< CHANGE THIS TO YOUR ACTUAL URL
+SCREENSHOT_WIDTH = 800
+SCREENSHOT_HEIGHT = 480
+REQUEST_TIMEOUT = 30  # Timeout for HTTP request (seconds)
+RETRY_ATTEMPTS = 3    # Number of retry attempts if request fails
 
 def create_error_image(message, inky_display):
     """Create an error image with the given message to display on the Inky."""
@@ -57,19 +63,50 @@ def create_error_image(message, inky_display):
     
     return img
 
-def is_image_stale(filepath, max_age_minutes):
-    """Check if the image file is older than max_age_minutes."""
-    try:
-        mod_time = os.path.getmtime(filepath)
-        file_age = datetime.now() - datetime.fromtimestamp(mod_time)
-        return file_age > timedelta(minutes=max_age_minutes)
-    except Exception as e:
-        print(f"Error checking file age: {e}")
-        return True  # Consider file stale if we can't check its age
+def fetch_weather_image():
+    """Fetch weather image from the API endpoint."""
+    params = {
+        'width': SCREENSHOT_WIDTH,
+        'height': SCREENSHOT_HEIGHT
+    }
+    
+    for attempt in range(RETRY_ATTEMPTS):
+        try:
+            print(f"Fetching weather image from API (attempt {attempt + 1}/{RETRY_ATTEMPTS})...")
+            response = requests.get(
+                WEATHER_API_URL, 
+                params=params, 
+                timeout=REQUEST_TIMEOUT,
+                headers={'User-Agent': 'WeatherFrame-Pi/1.0'}
+            )
+            response.raise_for_status()
+            
+            # Check if response is actually an image
+            content_type = response.headers.get('content-type', '')
+            if not content_type.startswith('image/'):
+                raise ValueError(f"Expected image, got {content_type}")
+            
+            print(f"Successfully fetched image ({len(response.content)} bytes)")
+            return response.content
+            
+        except requests.exceptions.Timeout:
+            print(f"Request timeout on attempt {attempt + 1}")
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed on attempt {attempt + 1}: {e}")
+        except ValueError as e:
+            print(f"Invalid response on attempt {attempt + 1}: {e}")
+        except Exception as e:
+            print(f"Unexpected error on attempt {attempt + 1}: {e}")
+        
+        if attempt < RETRY_ATTEMPTS - 1:
+            print("Waiting 5 seconds before retry...")
+            time.sleep(5)
+    
+    return None
 
 def display_image():
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting display update")
-    print(f"Looking for image file: {IMAGE_FULL_PATH}")
+    print(f"Fetching weather image from: {WEATHER_API_URL}")
     
     # Initialize Inky display
     try:
@@ -78,18 +115,10 @@ def display_image():
         print(f"Failed to initialize Inky display: {e}")
         return
     
-    # Check if image exists and is not stale
-    if not os.path.exists(IMAGE_FULL_PATH):
-        error_msg = f"Image not found:\n{IMAGE_FULL_PATH}"
-        print(error_msg)
-        error_img = create_error_image(error_msg, inky_display)
-        inky_display.set_image(error_img)
-        inky_display.show()
-        return
-    
-    if is_image_stale(IMAGE_FULL_PATH, MAX_IMAGE_AGE_MINUTES):
-        mod_time = datetime.fromtimestamp(os.path.getmtime(IMAGE_FULL_PATH))
-        error_msg = f"Stale image:\n{mod_time.strftime('%Y-%m-%d %H:%M')}\n(> {MAX_IMAGE_AGE_MINUTES} min old)"
+    # Fetch weather image from API
+    image_data = fetch_weather_image()
+    if image_data is None:
+        error_msg = f"Failed to fetch image from:\n{WEATHER_API_URL}\nafter {RETRY_ATTEMPTS} attempts"
         print(error_msg)
         error_img = create_error_image(error_msg, inky_display)
         inky_display.set_image(error_img)
@@ -97,28 +126,15 @@ def display_image():
         return
 
     try:
-        print("Loading image from NFS share...")
-        # Verify file is accessible and not being written to
+        print("Processing downloaded image...")
+        # Open the image using Pillow from bytes
         try:
-            # Try to open the file in read-binary mode to check accessibility
-            with open(IMAGE_FULL_PATH, 'rb') as f:
-                f.read(1)  # Try reading first byte to ensure file is accessible
-        except (IOError, OSError) as e:
-            error_msg = f"File access error:\n{str(e)}"
-            print(error_msg)
-            error_img = create_error_image(error_msg, inky_display)
-            inky_display.set_image(error_img)
-            inky_display.show()
-            return
-
-        # Open the image using Pillow
-        try:
-            img = Image.open(IMAGE_FULL_PATH)
+            img = Image.open(io.BytesIO(image_data))
             # Load the image to verify it's complete
             img.verify()
-            img = Image.open(IMAGE_FULL_PATH)  # Reopen after verify
+            img = Image.open(io.BytesIO(image_data))  # Reopen after verify
         except Exception as e:
-            error_msg = f"Invalid image file:\n{str(e)[:50]}..."
+            error_msg = f"Invalid image data:\n{str(e)[:50]}..."
             print(f"Error loading image: {e}")
             error_img = create_error_image(error_msg, inky_display)
             inky_display.set_image(error_img)
@@ -126,13 +142,13 @@ def display_image():
             return
         
         # Verify image size (should be 800x480)
-        if img.size != (800, 480):
-            print(f"Warning: Image size is {img.size}, expected (800, 480).")
-            # Optionally resize, but ideally the generator script ensures the correct size
-            # img = img.resize((800, 480))
+        if img.size != (SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT):
+            print(f"Warning: Image size is {img.size}, expected ({SCREENSHOT_WIDTH}, {SCREENSHOT_HEIGHT})")
+            print("Resizing image to fit display...")
+            img = img.resize((SCREENSHOT_WIDTH, SCREENSHOT_HEIGHT), Image.Resampling.LANCZOS)
 
-        # Note: The image is already palettized ('P' mode). 
-        # The Inky display expects this format.
+        # Keep the original image format - let Inky handle the color conversion
+        print(f"Image format: {img.mode}, size: {img.size}")
 
         print("Sending image to Inky display...")
         inky_display.set_image(img)
