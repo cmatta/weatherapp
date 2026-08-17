@@ -2,12 +2,12 @@ import { NextResponse } from 'next/server';
 
 const API_KEY = process.env.OPENWEATHERMAP_API_KEY;
 const BASE_URL = 'https://api.openweathermap.org/data/3.0/onecall';
-const GEO_URL = 'http://api.openweathermap.org/geo/1.0/direct';
+const GEO_URL = 'https://api.openweathermap.org/geo/1.0/direct';
 
 export const dynamic = 'force-dynamic';
 
 async function getCoordinates(city: string) {
-  const response = await fetch(`${GEO_URL}?q=${city}&limit=1&appid=${API_KEY}`);
+  const response = await fetch(`${GEO_URL}?q=${encodeURIComponent(city)}&limit=1&appid=${API_KEY}`);
   if (!response.ok) {
     throw new Error('Failed to fetch coordinates');
   }
@@ -20,7 +20,6 @@ async function getCoordinates(city: string) {
 
 async function getWeather(lat: number, lon: number) {
   const url = `${BASE_URL}?lat=${lat}&lon=${lon}&exclude=minutely,hourly,alerts&units=imperial&appid=${API_KEY}`
-  console.log('Fetching weather from: ', url);
 
   const response = await fetch(url, {
     cache: 'no-store',
@@ -33,12 +32,7 @@ async function getWeather(lat: number, lon: number) {
   }
   
   const data = await response.json();
-  
-  // Debug timestamps
-  // console.log('Current time:', new Date().toISOString());
-  // console.log('API data time:', new Date(data.current.dt * 1000).toISOString());
-  // console.log('Full response:', data);
-  
+
   return data;
 }
 

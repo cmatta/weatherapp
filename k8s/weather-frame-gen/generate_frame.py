@@ -46,19 +46,18 @@ async def capture_screenshot(url, width, height):
         browser = await p.chromium.launch() 
         page = await browser.new_page()
         await page.set_viewport_size({"width": width, "height": height})
+        # Capture console logs (optional debugging) - must be registered before navigation
+        page.on("console", lambda msg: print(f"Browser Console: {msg.text()}"))
 
         try:
             await page.goto(url, wait_until='networkidle', timeout=60000) # Increased timeout
             print("Page loaded. Waiting for tide info...")
             # Wait for an element unique to the tide section to ensure it's rendered
-            # --- Increased timeout to 60 seconds --- 
-            await page.wait_for_selector('[data-testid="tide-info"]', state='visible', timeout=60000) 
+            # --- Increased timeout to 60 seconds ---
+            await page.wait_for_selector('[data-testid="tide-chart"]', state='visible', timeout=60000)
             print("Tide info found. Capturing screenshot...")
-            
+
             screenshot_bytes = await page.screenshot(type='png')
-            
-             # Capture console logs (optional debugging)
-            page.on("console", lambda msg: print(f"Browser Console: {msg.text()}"))
 
         except Exception as e:
             print(f"Error during Playwright navigation/capture: {e}")

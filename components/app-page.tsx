@@ -1,180 +1,83 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import dynamic from 'next/dynamic'
 const TideChart = dynamic(() => import('./TideChart'), { ssr: false })
 import { Sun, Cloud, CloudRain, Waves, CloudLightning, CloudDrizzle, CloudSnow } from 'lucide-react'
 import { WeatherData } from '../models/weatherData'
-import { TideData, TidePrediction } from '../models/tidePrediction'
+import { TideData, TideExtreme } from '../models/tidePrediction'
 import { formatDateTime } from '../lib/utils'
 import MoonPhaseIcon, { type MoonPhaseType } from './moonPhase'
 
 const timeZone = 'America/New_York';
+const REFRESH_MS = 30 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+// Asymmetric window: extremes alternate every ~6.2h, so a symmetric ±12h span
+// leaves only 12h of future and can hold just one upcoming extreme, silently
+// dropping the next High or Low from the display.
+const TIDE_WINDOW_BACK_MS = 4 * HOUR_MS;
+const TIDE_WINDOW_FORWARD_MS = 20 * HOUR_MS;
+// The frame is 800x480 minus the 2px border and p-3 padding on each side.
+const CONTENT_WIDTH = 772;
 
 function mapMoonPhaseToType(phaseValue: number): MoonPhaseType {
-  if (phaseValue === 0 || phaseValue === 1) return 'new';
-  if (phaseValue > 0 && phaseValue < 0.25) return 'waxingCrescent';
-  if (phaseValue === 0.25) return 'firstQuarter';
-  if (phaseValue > 0.25 && phaseValue < 0.5) return 'waxingGibbous';
-  if (phaseValue === 0.5) return 'full';
-  if (phaseValue > 0.5 && phaseValue < 0.75) return 'waningGibbous';
-  if (phaseValue === 0.75) return 'lastQuarter';
-  if (phaseValue > 0.75 && phaseValue < 1) return 'waningCrescent';
-  return 'new'; // Default fallback
+  // Tolerance bands: OWM reports a float, so exact hits on 0/0.25/0.5/0.75
+  // essentially never occur.
+  const EPS = 0.02;
+  if (phaseValue < EPS || phaseValue > 1 - EPS) return 'new';
+  if (Math.abs(phaseValue - 0.25) <= EPS) return 'firstQuarter';
+  if (Math.abs(phaseValue - 0.5) <= EPS) return 'full';
+  if (Math.abs(phaseValue - 0.75) <= EPS) return 'lastQuarter';
+  if (phaseValue < 0.25) return 'waxingCrescent';
+  if (phaseValue < 0.5) return 'waxingGibbous';
+  if (phaseValue < 0.75) return 'waningGibbous';
+  return 'waningCrescent';
 }
 
-function getWeatherIcon(description: string, current?: { sunset?: number, moonPhase?: number }, isCurrentWeather = false) {
-  // Only check for night/moon if this is the current weather box
-  if (isCurrentWeather && current?.sunset && Date.now() / 1000 > current.sunset) {
-    // Use the mapping function
-    const phaseType = mapMoonPhaseToType(current.moonPhase ?? 0);
-    return <MoonPhaseIcon phase={phaseType} size={32} /> 
-  }
-
-  switch (description.toLowerCase()) {
-    case 'clear sky':
-      return <Sun className="w-8 h-8 text-chart-3" /> // Yellow
-    case 'few clouds':
-    case 'scattered clouds':
-    case 'broken clouds':
-      return <Cloud className="w-8 h-8" /> // Black (default foreground)
-    case 'shower rain':
-      return <CloudDrizzle className="w-8 h-8 text-accent" /> // Blue
-    case 'rain':
-      return <CloudRain className="w-8 h-8 text-accent" /> // Blue
-    case 'thunderstorm':
-      return <CloudLightning className="w-8 h-8 text-destructive" /> // Red
-    case 'snow':
-      return <CloudSnow className="w-8 h-8 text-accent" /> // Blue
+// Takes an OpenWeatherMap `weather[0].main` group, not a description string.
+function getWeatherIcon(main: string, size: number) {
+  const props = { size, strokeWidth: 2.25 };
+  switch (main.toLowerCase()) {
+    case 'clouds':
+    // Atmosphere group: no dedicated icon, and haze reads as overcast anyway.
     case 'mist':
-      return <Cloud className="w-8 h-8" /> // Black (default foreground)
+    case 'fog':
+    case 'haze':
+    case 'smoke':
+    case 'dust':
+    case 'sand':
+    case 'ash':
+    case 'squall':
+    case 'tornado':
+      return <Cloud {...props} />
+    case 'rain':
+      return <CloudRain {...props} className="text-inky-blue" />
+    case 'drizzle':
+      return <CloudDrizzle {...props} className="text-inky-blue" />
+    case 'thunderstorm':
+      return <CloudLightning {...props} className="text-inky-red" />
+    case 'snow':
+      return <CloudSnow {...props} className="text-inky-blue" />
+    case 'clear':
     default:
-      return <Sun className="w-8 h-8 text-chart-3" /> // Yellow
+      // Orange, not yellow: #FFFF00 on white all but vanishes after dithering.
+      return <Sun {...props} className="text-inky-orange" />
   }
 }
 
-type AppPageProps = {
-  city: string;
-  stationId: number;
-};
+// One temperature format everywhere. The colors carry "high" and "low", so the
+// words and the unit come off.
+function TempRange({ high, low, className }: { high: number; low: number; className?: string }) {
+  return (
+    <div className={`whitespace-nowrap ${className ?? ''}`}>
+      <span className="text-inky-red">{Math.round(high)}°</span>
+      <span className="px-0.5">/</span>
+      <span className="text-inky-blue">{Math.round(low)}°</span>
+    </div>
+  )
+}
 
-export default function AppPage({ city, stationId }: AppPageProps) {
-
-  // Add a time dependency that updates every 30 minutes
-  const timeIntervalKey = Math.floor(Date.now() / (30 * 60 * 1000)); 
-  const currentTime = useMemo(() => Date.now(), [timeIntervalKey]);
-
-  // State to hold the time *after* client-side hydration
-  const [clientTime, setClientTime] = useState<number | null>(null);
-  const [hasMounted, setHasMounted] = useState(false);
-
-  useEffect(() => {
-    setHasMounted(true);
-  }, []);
-  
-
-  const [weather, setWeather] = useState<WeatherData | null>(null);
-  const [tides, setTides] = useState<TideData | null>(null);
-  const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Set clientTime after component mounts
-  useEffect(() => {
-    setClientTime(currentTime);
-  }, [currentTime]); // Update if currentTime changes due to 30min interval
-
-  const dates = useMemo(() => {
-    return {
-      beginDate: new Date(currentTime - 12 * 60 * 60 * 1000),
-      endDate: new Date(currentTime + 12 * 60 * 60 * 1000)
-    }
-  }, [currentTime])  // Depend on currentTime
-
-  const handleFetchWeatherAndTides = useCallback(async () => {
-    setError('')
-    setIsLoading(true); // Start loading
-    try {
-      const [weatherResponse, tideResponse] = await Promise.all([
-        fetch(`/api/weather?city=${city}`),
-        fetch(`/api/tides?station_id=${stationId}&begin_date=${formatDateTime(dates.beginDate)}&end_date=${formatDateTime(dates.endDate)}&tz=GMT`)
-      ]);
-      const weatherData = await weatherResponse.json();
-      const tideData = await tideResponse.json();
-
-      setWeather(weatherData);
-      setTides(tideData);
-
-    } catch (err: Error | unknown) {
-      setError(err instanceof Error ? err.message : 'An unknown error occurred');
-    } finally {
-      setIsLoading(false); // Finish loading regardless of success/error
-    }
-  }, [city, stationId, dates.beginDate, dates.endDate])
-
-  useEffect(() => {
-    handleFetchWeatherAndTides()
-  }, [handleFetchWeatherAndTides])
-
-  useEffect(() => {
-    if (weather?.current) {
-      console.log('weather.current:', weather.current);
-    }
-  }, [weather]);
-
-  // Find next high and low tides after the current time
-  const { nextHighTide, nextLowTide } = useMemo(() => {
-    let nextHigh: TidePrediction | null = null;
-    let nextLow: TidePrediction | null = null;
-
-    if (tides?.predictions && tides.predictions.length >= 3) {
-      // Ensure predictions are sorted by time
-      const sortedPredictions = [...tides.predictions].sort((a, b) => new Date(a.time + ' GMT').getTime() - new Date(b.time + ' GMT').getTime());
-
-      for (let i = 1; i < sortedPredictions.length - 1; i++) {
-        const predTimeMs = new Date(sortedPredictions[i].time + ' GMT').getTime();
-        
-        // Only consider predictions after the current time
-        if (predTimeMs > currentTime) {
-          const prevHeight = sortedPredictions[i - 1].height;
-          const currentHeight = sortedPredictions[i].height;
-          const nextHeight = sortedPredictions[i + 1].height;
-
-          // Check for local maximum (High Tide)
-          if (currentHeight > prevHeight && currentHeight > nextHeight && !nextHigh) {
-            nextHigh = sortedPredictions[i];
-          }
-          
-          // Check for local minimum (Low Tide)
-          if (currentHeight < prevHeight && currentHeight < nextHeight && !nextLow) {
-            nextLow = sortedPredictions[i];
-          }
-        }
-        
-        // Stop searching if both are found after current time
-        if (nextHigh && nextLow) {
-          break;
-        }
-      }
-    }
-    return { nextHighTide: nextHigh, nextLowTide: nextLow };
-  }, [tides, currentTime]); // Recalculate when tides or currentTime changes
-
-  // Prepare chart data for tide chart
-  const chartData = useMemo(() => {
-    if (!tides || !dates) return [];
-    return tides.predictions
-      .filter(pred => {
-        const predTime = new Date(pred.time + ' GMT');
-        return predTime >= new Date(dates.beginDate) && predTime <= new Date(dates.endDate);
-      })
-      .map(pred => ({
-        ...pred,
-        time: new Date(pred.time + ' GMT').getTime(), // Use timestamp for chart
-        height: pred.height
-      }))
-  }, [tides, dates]); // Removed timeIntervalKey from dependency array
-
+function Frame({ children }: { children: React.ReactNode }) {
   return (
     <div
       style={{
@@ -188,100 +91,201 @@ export default function AppPage({ city, stationId }: AppPageProps) {
       }}
       data-testid="inky-root"
     >
-      <div className="p-4 border border-black bg-background text-foreground w-full h-full overflow-hidden">
-      <Card className="w-full h-full border-none shadow-none rounded-none bg-transparent">
-        <CardHeader className="pb-2 pt-2">
-          <CardTitle className="text-xl">Weather for {city.includes(',') ? city.split(',')[0] : city}</CardTitle>
-          {/* Only render time after client mount */}
-          {hasMounted && clientTime && (
-            <p className='text-xs text-right'>Last Refresh: {new Date(clientTime).toLocaleTimeString([], { timeZone: timeZone, hour: 'numeric', minute: '2-digit' })}</p>
-          )}
-        </CardHeader>
-        <CardContent>
-          {error && <p className="mb-4 text-destructive">Error: {error}</p>} 
-          {isLoading && !error && <p>Loading...</p>}
-
-          {!isLoading && !error && weather && tides && (
-            <>
-              <div className="grid grid-cols-6 gap-4 mb-6">
-                <div className="col-span-2 p-4 rounded-lg border border-black"> 
-                  <div className="flex items-center justify-between">
-                    {getWeatherIcon(weather.current.weather[0].main, {
-                      sunset: weather.current.sunset,
-                      moonPhase: weather.daily[0].moon_phase
-                    }, true)}
-                    <div className="text-3xl font-bold">{Math.round(weather.current.temp)}°F</div>
-                  </div>
-                  <div className="mt-2">
-                    <div>{weather.current.weather[0].description}</div>
-                    <div>
-                      H: <span className="text-[var(--inky-red)]">{Math.round(weather.daily[0].temp.max)}°</span> L: <span className="text-[var(--inky-blue)]">{Math.round(weather.daily[0].temp.min)}°</span>
-                    </div>
-                  </div>
-                </div>
-                {weather.daily.slice(1, 5).map((day, index) => (
-                  <div key={index} className="text-center p-2 rounded-lg border border-black">
-                    <div className="text-sm">{new Date(day.dt * 1000).toLocaleDateString('en-US', { weekday: 'short' })}</div>
-                    <div className="flex justify-center w-full mb-1">{getWeatherIcon(day.weather[0].main)}</div>
-                    <div className="text-sm font-semibold">
-                      High: <span className="text-[var(--inky-red)]">{Math.round(day.temp.max)}°F</span>, Low: <span className="text-[var(--inky-blue)]">{Math.round(day.temp.min)}°F</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold mb-2">Tide Chart</h3>
-                {hasMounted && (
-                  <>
-                    <TideChart chartData={chartData} timeZone={timeZone} />
-                  </>
-                )}
-
-                {tides && (
-                  <div data-testid="tide-info" className="flex items-center justify-center mt-2">
-                    <Waves className="w-5 h-5 mr-2 text-[var(--inky-blue)]" /> {/* Blue Waves icon using variable */}
-                    <span className="font-semibold">
-                      Current Tide: {
-                        tides.predictions.reduce((closest: TidePrediction | null , current: TidePrediction) => {
-                          // Convert GMT time to local time (not sure why this is necessary???)
-                          const currentTime = new Date(current.time + ' GMT').getTime();
-                          const now = Date.now();
-                          const diff = Math.abs(currentTime - now);
-                          if (!closest || diff < Math.abs(new Date(closest.time + ' GMT').getTime() - now)) {
-                            return current;
-                          }
-                          return closest;
-                        }, null)?.height.toFixed(2)
-                      }ft
-                    </span>                    
-                  </div>
-                )}
-                {/* Display Next High/Low Tides */}
-                { (nextHighTide || nextLowTide) && (
-                  <div className="text-center mt-2 text-xs">
-                    {nextHighTide && (
-                      <p className="mb-1">
-                        Next High: {nextHighTide.height.toFixed(1)} ft at{' '}
-                        {new Date(nextHighTide.time + ' GMT').toLocaleTimeString([], { timeZone: timeZone, hour: 'numeric', minute: '2-digit' })}
-                      </p>
-                    )}
-                    {nextLowTide && (
-                      <p>
-                        Next Low: {nextLowTide.height.toFixed(1)} ft at{' '}
-                        {new Date(nextLowTide.time + ' GMT').toLocaleTimeString([], { timeZone: timeZone, hour: 'numeric', minute: '2-digit' })}
-                      </p>
-                    )}
-                    {!nextHighTide && !nextLowTide && tides?.predictions?.length > 0 && (
-                      <p className="text-sm">Tide data available, but next high/low not found in the upcoming window.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+      <div className="flex h-full w-full flex-col overflow-hidden border-2 border-black bg-background p-3 text-foreground">
+        {children}
       </div>
     </div>
+  )
+}
+
+async function fetchJson<T>(url: string, label: string): Promise<T> {
+  const response = await fetch(url);
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`;
+    throw new Error(`${label}: ${detail}`);
+  }
+  if (!body) throw new Error(`${label}: response was not JSON`);
+  return body as T;
+}
+
+type AppPageProps = {
+  city: string;
+  stationId: number;
+};
+
+export default function AppPage({ city, stationId }: AppPageProps) {
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [tides, setTides] = useState<TideData | null>(null);
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  // Timestamp of the last successful fetch. Everything time-relative on the
+  // frame is computed against it, so the whole display is internally consistent.
+  const [lastRefresh, setLastRefresh] = useState<number | null>(null);
+
+  const handleFetchWeatherAndTides = useCallback(async () => {
+    const requestedAt = Date.now();
+    setError('');
+    try {
+      // Round the window to the hour so repeated fetches share a server cache key.
+      const windowStart = Math.floor((requestedAt - TIDE_WINDOW_BACK_MS) / HOUR_MS) * HOUR_MS;
+      const windowEnd = Math.floor((requestedAt + TIDE_WINDOW_FORWARD_MS) / HOUR_MS) * HOUR_MS;
+      const tideParams = new URLSearchParams({
+        station_id: String(stationId),
+        begin_date: formatDateTime(new Date(windowStart)),
+        end_date: formatDateTime(new Date(windowEnd)),
+      });
+      const [weatherData, tideData] = await Promise.all([
+        fetchJson<WeatherData>(`/api/weather?city=${encodeURIComponent(city)}`, 'Weather'),
+        fetchJson<TideData>(`/api/tides?${tideParams}`, 'Tides'),
+      ]);
+
+      setWeather(weatherData);
+      setTides(tideData);
+      setLastRefresh(requestedAt);
+    } catch (err: Error | unknown) {
+      setError(err instanceof Error ? err.message : 'An unknown error occurred');
+    } finally {
+      setIsLoading(false); // Finish loading regardless of success/error
+    }
+  }, [city, stationId])
+
+  useEffect(() => {
+    handleFetchWeatherAndTides()
+    const interval = setInterval(handleFetchWeatherAndTides, REFRESH_MS)
+    return () => clearInterval(interval)
+  }, [handleFetchWeatherAndTides])
+
+  const referenceTime = lastRefresh ?? 0;
+
+  // Next high and low come straight from the NOAA hilo extremes.
+  const { nextHighTide, nextLowTide } = useMemo(() => {
+    const upcoming = (tides?.extremes ?? [])
+      .filter(extreme => extreme.time > referenceTime)
+      .sort((a, b) => a.time - b.time);
+    return {
+      nextHighTide: upcoming.find(e => e.type === 'H') ?? null,
+      nextLowTide: upcoming.find(e => e.type === 'L') ?? null,
+    };
+  }, [tides, referenceTime]);
+
+  const currentTideHeight = useMemo(() => {
+    const predictions = tides?.predictions ?? [];
+    if (predictions.length === 0) return null;
+    const nearest = predictions.reduce((closest, prediction) =>
+      Math.abs(prediction.time - referenceTime) < Math.abs(closest.time - referenceTime)
+        ? prediction
+        : closest
+    );
+    return nearest.height;
+  }, [tides, referenceTime]);
+
+  if (isLoading) {
+    return (
+      <Frame>
+        <div className="flex h-full items-center justify-center text-3xl font-bold">Loading…</div>
+      </Frame>
+    )
+  }
+
+  // A transient fetch failure shouldn't blank a frame that still holds good
+  // data; the stale "Updated" time already shows the reader how old it is.
+  if (!weather || !tides) {
+    return (
+      <Frame>
+        <div className="flex h-full flex-col items-center justify-center gap-4 px-10 text-center">
+          <p className="text-4xl font-bold text-inky-red">Weather unavailable</p>
+          <p className="break-words text-xl font-semibold">{error || 'No data returned'}</p>
+          {lastRefresh && (
+            <p className="text-base font-semibold">
+              Last good update{' '}
+              {new Date(lastRefresh).toLocaleTimeString('en-US', { timeZone, hour: 'numeric', minute: '2-digit' })}
+            </p>
+          )}
+        </div>
+      </Frame>
+    )
+  }
+
+  const cityName = city.includes(',') ? city.split(',')[0] : city;
+  const isNight =
+    referenceTime < weather.current.sunrise * 1000 || referenceTime > weather.current.sunset * 1000;
+  const dayLabel = (dt: number) => {
+    const date = new Date(dt * 1000);
+    return `${date.toLocaleDateString('en-US', { timeZone, weekday: 'short' })} ${date.toLocaleDateString('en-US', { timeZone, day: 'numeric' })}`;
+  };
+  const tideLabel = (extreme: TideExtreme) =>
+    `${extreme.height.toFixed(1)} ft at ${new Date(extreme.time).toLocaleTimeString('en-US', { timeZone, hour: 'numeric', minute: '2-digit' })}`;
+
+  return (
+    <Frame>
+      <header className="flex flex-none items-end justify-between border-b-2 border-black pb-2">
+        <h1 className="text-[34px] font-bold leading-none">{cityName}</h1>
+        <div className="text-right leading-tight">
+          <div className="text-lg font-bold">
+            {new Date(referenceTime).toLocaleDateString('en-US', { timeZone, weekday: 'short', month: 'short', day: 'numeric' })}
+          </div>
+          <div className="text-sm font-semibold">
+            Updated {new Date(referenceTime).toLocaleTimeString('en-US', { timeZone, hour: 'numeric', minute: '2-digit' })}
+          </div>
+        </div>
+      </header>
+
+      <div className="mt-3 grid h-[150px] flex-none grid-cols-6 gap-2">
+        <div className="col-span-2 flex flex-col border-2 border-black p-2">
+          <div className="text-base font-bold">Now</div>
+          <div className="flex flex-1 items-center justify-between">
+            {isNight && weather.current.weather[0].main.toLowerCase() === 'clear' ? (
+              // Moon only on clear nights — a rainy night should still show rain.
+              <MoonPhaseIcon phase={mapMoonPhaseToType(weather.daily[0].moon_phase)} size={48} />
+            ) : (
+              getWeatherIcon(weather.current.weather[0].main, 48)
+            )}
+            <div className="text-[44px] font-bold leading-none">{Math.round(weather.current.temp)}°</div>
+          </div>
+          <div className="truncate text-base font-semibold capitalize">
+            {weather.current.weather[0].description}
+          </div>
+          <TempRange
+            high={weather.daily[0].temp.max}
+            low={weather.daily[0].temp.min}
+            className="text-xl font-bold"
+          />
+        </div>
+        {weather.daily.slice(1, 5).map((day) => (
+          <div key={day.dt} className="flex flex-col items-center justify-between border-2 border-black p-2">
+            <div className="text-base font-bold">{dayLabel(day.dt)}</div>
+            {getWeatherIcon(day.weather[0].main, 44)}
+            <TempRange high={day.temp.max} low={day.temp.min} className="text-lg font-bold" />
+          </div>
+        ))}
+      </div>
+
+      <div
+        data-testid="tide-info"
+        className="mt-3 flex flex-none items-baseline justify-between border-b-2 border-black pb-1"
+      >
+        <h2 className="flex items-center gap-2 text-xl font-bold">
+          <Waves size={22} strokeWidth={2.5} className="text-inky-blue" />
+          Tides
+        </h2>
+        <div className="flex items-baseline gap-5 text-base font-bold">
+          {currentTideHeight !== null && <span>Now {currentTideHeight.toFixed(1)} ft</span>}
+          {nextHighTide && <span className="text-inky-red">High {tideLabel(nextHighTide)}</span>}
+          {nextLowTide && <span className="text-inky-blue">Low {tideLabel(nextLowTide)}</span>}
+        </div>
+      </div>
+
+      <div className="mt-2 flex-none">
+        <TideChart
+          chartData={tides.predictions}
+          extremes={tides.extremes}
+          now={referenceTime}
+          timeZone={timeZone}
+          width={CONTENT_WIDTH}
+          height={172}
+        />
+      </div>
+    </Frame>
   )
 }

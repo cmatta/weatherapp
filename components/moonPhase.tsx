@@ -1,98 +1,53 @@
 import React from 'react';
 
-// --- Define the specific allowed phase types --- 
+// --- Define the specific allowed phase types ---
 export type MoonPhaseType = 'new' | 'waxingCrescent' | 'firstQuarter' | 'waxingGibbous' | 'full' | 'waningGibbous' | 'lastQuarter' | 'waningCrescent';
 
 interface MoonPhaseIconProps {
   phase: MoonPhaseType; // Use the specific type here
   size?: number;
-  color?: string;
 }
 
-const MoonPhaseIcon: React.FC<MoonPhaseIconProps> = ({ 
-  phase, 
-  size = 24, 
-  color = '#FFF'
-}) => {
+// The lit portion is filled black and the unlit portion stays white: on a white
+// e-ink panel that is the only pairing where full and new read differently.
+const LIT_FILL = 'var(--inky-black)';
+const UNLIT_FILL = 'var(--inky-white)';
+
+// Right-hand limb (waxing) is `A10 10 0 0 1`, left-hand limb (waning) is
+// `A10 10 0 0 0`. The terminator is a half-ellipse whose rx shrinks toward the
+// quarters; a sweep away from the limb gives a crescent, toward it a gibbous.
+const LIT_PATHS: Record<Exclude<MoonPhaseType, 'new' | 'full'>, string> = {
+  waxingCrescent: 'M12 2 A10 10 0 0 1 12 22 A5 10 0 0 0 12 2 Z',
+  firstQuarter: 'M12 2 A10 10 0 0 1 12 22 Z',
+  waxingGibbous: 'M12 2 A10 10 0 0 1 12 22 A5 10 0 0 1 12 2 Z',
+  waningGibbous: 'M12 2 A10 10 0 0 0 12 22 A5 10 0 0 0 12 2 Z',
+  lastQuarter: 'M12 2 A10 10 0 0 0 12 22 Z',
+  waningCrescent: 'M12 2 A10 10 0 0 0 12 22 A5 10 0 0 1 12 2 Z',
+};
+
+const MoonPhaseIcon: React.FC<MoonPhaseIconProps> = ({ phase, size = 24 }) => {
   return (
-    <svg 
-      width={size} 
-      height={size} 
-      viewBox="0 0 24 24" 
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      {getMoonPhase(phase, color)}
-    </svg>
-  );
-};
-
-const getMoonPhase = (phase: MoonPhaseType, color: string) => {
-  const phases = {
-    new: (
-      <circle cx="12" cy="12" r="10" stroke="currentColor" fill="none" strokeWidth="2" />
-    ),
-    waxingCrescent: (
-      <path
-        d="M12 2a10 10 0 0 1 0 20 10 10 0 1 0 0-20z"
-        fill={color}
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-    ),
-    firstQuarter: (
-      <path
-        d="M12 2a10 10 0 0 1 0 20V2z"
-        fill={color}
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-    ),
-    waxingGibbous: (
-      <path
-        d="M12 2a10 10 0 0 1 0 20 10 10 0 0 0 0-20z"
-        fill={color}
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-    ),
-    full: (
+      {/* Full disc outline, so the unlit portion still reads as a moon. */}
       <circle
         cx="12"
         cy="12"
         r="10"
-        fill={color}
-        stroke="currentColor"
+        fill={phase === 'full' ? LIT_FILL : UNLIT_FILL}
+        stroke={LIT_FILL}
         strokeWidth="2"
       />
-    ),
-    waningGibbous: (
-      <path
-        d="M12 2a10 10 0 0 0 0 20 10 10 0 0 1 0-20z"
-        fill={color}
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-    ),
-    lastQuarter: (
-      <path
-        d="M12 2a10 10 0 0 0 0 20V2z"
-        fill={color}
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-    ),
-    waningCrescent: (
-      <path
-        d="M12 2a10 10 0 1 1 0 20 10 10 0 0 0 0-20z"
-        fill={color}
-        stroke="currentColor"
-        strokeWidth="2"
-      />
-    ),
-  };
-
-  return phases[phase] || phases.new;
+      {phase !== 'new' && phase !== 'full' && (
+        <path d={LIT_PATHS[phase]} fill={LIT_FILL} stroke="none" />
+      )}
+    </svg>
+  );
 };
 
 export default MoonPhaseIcon;
