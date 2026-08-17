@@ -1,0 +1,8 @@
+node_modules
+.next
+.git
+.env*
+.omc
+.vscode
+k8s
+weatherapp.png
